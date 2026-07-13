@@ -1,5 +1,7 @@
 # POWER DESIGN — EC200U Telematics Tracker
 
+> **Revision note:** This revision replaces the representative/placeholder part classes from the prior draft with the finalized component selection (§8), and adds two design elements that weren't in the prior draft: a bidirectional input TVS with a common-mode EMI filter stage (§4.1/§8.1), and an eFuse PGOOD signal gating the pre-regulator's enable pin (§4.5/§8.3/§8.4). See `README.md` §3–4 and §6 for the corresponding architecture-diagram and sequencing-assumption updates.
+
 ## 1. Rail Definitions
 
 | Rail | Nominal Voltage | Feeds | Regulation |
@@ -59,11 +61,15 @@ Applying the same margin directly to +3V8: 3.0 A × 1.25 = **3.75 A** — induct
 
 ## 4. Protection Choices and Justification
 
-### 4.1 Input TVS
+### 4.1 Input TVS + EMI Filter
 
-**Choice:** Automotive-grade bidirectional TVS at the input connector, standoff voltage sized above the nominal 12/24 V range with margin (33–40 V class), clamping voltage kept below the absolute-max rating of the downstream reverse-polarity FET and eFuse.
+**Choice:** Automotive-grade bidirectional TVS at the input connector (36 V standoff class), immediately followed by a common-mode choke with differential-mode filter capacitors across the choke's terminals.
 
-**Justification:** This is a separate part from — and serves a separate function than — the TVS Quectel recommends directly at the EC200U's own VBAT pins (4.7 V standoff, up to 2550 W peak pulse power). That part protects the module from whatever transient energy survives everything upstream of it; it would be badly undersized if used at the vehicle-facing connector, which sees the full amplitude of ISO 7637-2 load-dump pulses. Both TVS parts are included, at different points in the chain, protecting different things from different threat models.
+**Justification — bidirectional, not unidirectional:** ISO 7637-2 includes negative-going transients (pulses 1, 2a, 2b) in addition to the positive load-dump pulse (5b). A unidirectional TVS clamps only one polarity and would pass a negative transient through essentially unclamped to the reverse-polarity stage, leaving the ideal-diode controller's reverse-bias detection to do double duty as both a polarity-fault response and a transient clamp — two different response-time requirements bundled into one mechanism. Going bidirectional keeps transient clamping and polarity protection as two separate, independently-verifiable jobs. Trade-off: a bidirectional part of the same standoff voltage clamps at a marginally higher voltage than its unidirectional counterpart in the same package family, which is carried through into the FET voltage-margin check in §8.2.
+
+**Justification — CM choke + filter caps immediately after the TVS:** The TVS is a surge-suppression device, sized for high pulse energy at low frequency; it is not a conducted-EMI filter. The common-mode choke, with differential capacitors across its terminals, is a separate, deliberately small first-pass LC filter stage aimed at conducted emissions (relevant given the wiring harness this connector sits on) rather than at surge energy — the two threats have different frequency content and are addressed by different topologies. This is a minimum first-pass filter at the architecture stage; final CM choke impedance and filter cap values are tuned against CISPR 25 conducted-emissions margin once real harness length and layout are known, not fixed here.
+
+**Note on the module-side TVS:** This input-connector TVS is a separate part from — and serves a separate function than — the TVS Quectel recommends directly at the EC200U's own VBAT pins (4.7 V standoff, up to 2550 W peak pulse power). That part protects the module from whatever transient energy survives everything upstream of it; it would be badly undersized if used at the vehicle-facing connector, which sees the full amplitude of ISO 7637-2 load-dump pulses. Both TVS parts are included, at different points in the chain, protecting different things from different threat models.
 
 ### 4.2 Reverse polarity
 
@@ -79,9 +85,15 @@ Applying the same margin directly to +3V8: 3.0 A × 1.25 = **3.75 A** — induct
 
 ### 4.4 Brownout / undervoltage handling
 
-**Choice:** Dedicated voltage supervisor IC monitoring +3V3, with adjustable threshold and power-on delay, gating both the MCU reset line and the modem buck's enable pin.
+**Choice:** Dedicated voltage supervisor IC monitoring +3V3, fixed factory-trimmed threshold with an externally programmable power-on delay, gating both the MCU reset line and the modem buck's enable pin.
 
-**Justification:** Each buck's own UVLO protects that buck from operating outside its own valid input range, but says nothing about system-level sequencing between two independently regulated rails. A dedicated supervisor is the one component whose job is enforcing the order rails come up in — and because MCU-rail stability can't depend on firmware (firmware can't run until the MCU rail is already stable), this sequencing has to live in hardware, not in a GPIO-driven enable line.
+**Justification:** Each buck's own UVLO protects that buck from operating outside its own valid input range, but says nothing about system-level sequencing between two independently regulated rails. A dedicated supervisor is the one component whose job is enforcing the order rails come up in — and because MCU-rail stability can't depend on firmware (firmware can't run until the MCU rail is already stable), this sequencing has to live in hardware, not in a GPIO-driven enable line. The finalized part (§8.7) uses a fixed threshold trimmed for a 3.3 V rail rather than an externally-set resistor divider — this removes one source of threshold-setting error at the cost of losing the ability to retune the trip point without a different device variant, which is an acceptable trade given the monitored rail's nominal voltage isn't expected to change.
+
+### 4.5 eFuse-gated pre-regulator enable (sequencing addition)
+
+**Choice:** The eFuse's PGOOD output is wired to the pre-regulator's enable pin, so the pre-regulator does not begin switching until the eFuse reports the input path is fault-free.
+
+**Justification:** This closes a gap that existed in the original protection-only view of the eFuse: a fault flag the MCU can read is useful for logging, but the MCU isn't running yet at this point in the boot sequence (see README assumption S5), so it can't act on that flag before the pre-regulator has already started. Gating the pre-regulator's own enable pin directly off PGOOD means the "is the input actually clean" decision is enforced in hardware, before any downstream stage draws current from it — consistent with the same design principle used for the +3V3-to-+3V8 supervisor gate in §4.4, just one stage earlier in the chain. Cost: none in additional components (PGOOD is a native output of the selected eFuse, §8.3); the cost is one more power-up sequencing dependency to verify on the bench (`VALIDATION_PLAN.md` T8).
 
 ## 5. Rail Sizing Rationale
 
@@ -156,15 +168,18 @@ This section maps every block in the power-path diagram to a specific, orderable
 
 Parts below are named as concrete, real, currently-orderable examples to make the selection defensible and traceable to a datasheet, not as a locked BOM — the exact orderable variant (package, exact current-limit/threshold option) should be confirmed against the vendor's current parametric table at schematic-capture time.
 
-### 8.1 Input TVS
+### 8.1 Input TVS + EMI Filter
 
 | Parameter | Selection |
 |---|---|
-| Representative part | Vishay/SMC **SM8S36A** (DO-218AB), automotive-qualified, unidirectional load-dump TVS |
-| Standoff voltage | 36 V — clears both 12 V and 24 V nominal systems with margin |
-| Clamping voltage | ≈58 V — must stay below the reverse-polarity FET's and eFuse's absolute-max voltage rating (see 8.2, 8.3) |
-| Peak pulse current | 114 A (large-package DO-218AB, sized for ISO 7637-2 pulse 5b / ISO 16750-2 load-dump energy, not just small ESD-class transients) |
-| Orientation note | Unidirectional, oriented to clamp positive over-voltage only — reverse-battery current is handled by the dedicated reverse-polarity stage (8.2), not by this part |
+| Representative part | Vishay **SM8S36CA** (DO-218AB), AEC-Q101 qualified, **bidirectional** load-dump TVS |
+| Standoff voltage | 36 V (typ.) — clears both 12 V and 24 V nominal systems with margin |
+| Breakdown voltage | 40 V (min) |
+| Clamping voltage | ≈58 V class at rated pulse current — must stay below the reverse-polarity FET's and eFuse's absolute-max voltage rating (see 8.2, 8.3); re-verify against the specific SM8S36CA datasheet curve at schematic capture, since bidirectional parts clamp marginally higher than the unidirectional SM8S36A at the same standoff voltage |
+| Qualification | Meets ISO 7637-2 and ISO 16750-2 surge specifications; AEC-Q101 qualified, TJ = 175 °C |
+| Orientation note | Bidirectional — clamps both positive load-dump and negative transients (ISO 7637-2 pulses 1, 2a, 2b) at the same part. Reverse-battery *steady-state* current (not transient) is still handled by the dedicated reverse-polarity stage (8.2); the two mechanisms are not redundant with each other — the TVS is a fast clamp for a transient event, the ideal-diode/FET stage is a sustained block for a wired-backwards fault |
+| EMI filter (added stage) | Common-mode choke placed immediately downstream of the TVS, with a differential filter capacitor pair (22 nF, 1 kV rating) across the choke's terminals |
+| EMI filter justification | The TVS is a surge-energy clamp, not a conducted-EMI filter — different threat, different frequency content, different part. The choke + capacitor pair is a minimum first-pass LC filter for conducted emissions on the harness; final choke impedance and cap value are tuned against measured CISPR 25 margin once harness length and layout are fixed, not derived at the architecture stage. The 1 kV cap rating is chosen with deliberate margin over the clamped transient voltage, not the steady-state 12/24 V input, since these caps sit directly across a node the TVS has just clamped |
 
 ### 8.2 Reverse Polarity — Controller + FET
 
@@ -179,16 +194,21 @@ Parts below are named as concrete, real, currently-orderable examples to make th
 
 | Parameter | Selection |
 |---|---|
-| Representative part | TI **TPS26630 / TPS26633** (TPS2663x family), 4.5–60 V, 6 A, 31 mΩ integrated FET eFuse |
-| Current limit setting | Set via external RILM resistor to ~4 A, above the 3.75 A design peak (8.2/§3 margin figure) with enough headroom to avoid nuisance trips on a legitimate TX burst (validated in `VALIDATION_PLAN.md` T7) |
-| Why this family specifically | Integrates adjustable OVLO, adjustable current limit, fault-flag output, and reverse-current blocking in one part — matches the requirement in §4.3/§4.4 for a fault event the MCU can log, not just a fuse that silently opens |
+| Finalized part | TI **TPS26630RGER** (TPS2663x family), 4.5–60 V, 0.6–6 A adjustable, 31 mΩ integrated FET eFuse, 24-pin VQFN |
+| Current limit setting | Set via external RILIM resistor to ~4 A, above the 3.75 A design peak (§3 margin figure) with enough headroom to avoid nuisance trips on a legitimate TX burst (validated in `VALIDATION_PLAN.md` T7) |
+| Why this part specifically | Integrates adjustable OVLO, adjustable current limit, fault-flag output, current monitor, and a PGOOD output usable to enable/disable a downstream converter — the PGOOD output is what §4.5's pre-regulator gating relies on, not just a passive fault flag for firmware to poll later |
 | Response time | Microsecond-class trip, per datasheet — orders of magnitude faster than a PTC, consistent with the justification in §4.3 |
+| Fixed-limit vs. pulse variant, noted for the record | TPS26630 has a **fixed** overcurrent limit — once IOL is set, the device regulates at that current continuously rather than tolerating a short 2×IOL pulse the way the TPS26633 variant in the same family does. This means the RILIM current-limit threshold has to be set to comfortably clear the *full* 3.75 A design peak on a sustained basis, not just survive it as a brief pulse. This was an open trade-off at the representative-part stage (previous revision of this document); TPS26630 is the part actually selected, so the current-limit resistor and the T7 nuisance-trip validation both need to be checked against this fixed-limit behavior specifically, not against the pulse-tolerant TPS26633 behavior |
+| Reverse polarity / reverse current | This part provides no reverse-current blocking or reverse-polarity protection on its own — consistent with the architecture, since that job is deliberately kept in the dedicated ideal-diode/FET stage (8.2) upstream, not duplicated here |
 
 ### 8.4 Pre-Regulator (VIN → +5V)
 
 | Parameter | Selection |
 |---|---|
-| Representative part | TI **TPS54360B-Q1** (60 V, 3.5 A, AEC-Q100, synchronous, survives load-dump pulses to 65 V per ISO 7637) — if the full 3.3 A design margin figure from §3 needs more headroom, the pin-compatible 5 A sibling in the same family is the direct upgrade path |
+| Finalized part | TI **TPS54560DDAR** (4.5–60 V, 5 A, synchronous, current-mode control, survives load-dump pulses to 65 V per ISO 7637 — same electrical load-dump spec as the -Q1 automotive-qualified sibling) |
+| Automotive qualification — flagged explicitly | The -Q1 electrical/automotive-qualified variant of this exact part (**TPS54560-Q1**) exists and is pin-compatible; **TPS54560DDAR is the non-automotive (industrial/commercial-grade) part**, meaning it has not been through AEC-Q100 stress qualification even though its datasheet electrical performance (including the 65 V load-dump survival spec) is identical. This is a deliberate cost/lead-time trade at this design stage per the margin policy in §3 (A7 — asset-tracking hardware, not a safety-critical ECU), not an oversight; it is called out here so it's an explicit decision to revisit, not a silent one, before committing to a production BOM |
+| Current margin | 5 A rated capability against the 3.3 A design figure (§3) — more headroom than the previously-considered 3.5 A part gave, at no inductor/layout cost difference since both are pin-compatible in the same package family |
+| Enable / sequencing (new) | EN pin is driven by the eFuse's PGOOD output, not tied directly to VIN — see §4.5. The pre-regulator does not begin switching until the eFuse reports the input path fault-free |
 | Inductor | ≈10 µH, saturation current rating ≥ 5 A (above the 3.3 A design figure with margin), low DCR to limit conduction loss at the reflected ≈2.64 A peak |
 | Output capacitance | Ceramic bulk (e.g. 2×22 µF, X7R, rated above 5 V with derating margin) plus additional bulk capacitance sized to absorb both downstream bucks' combined transient demand without excessive droop, per §6.1 |
 | Why synchronous | Per §5.2 — catch-diode conduction loss at this current level is a real efficiency/thermal cost the synchronous topology avoids |
@@ -197,8 +217,11 @@ Parts below are named as concrete, real, currently-orderable examples to make th
 
 | Parameter | Selection |
 |---|---|
-| Representative part class | Small synchronous buck, ≤6 V input, ≥1 A output, automotive-qualified (representative class: TI **TPS6282x-Q1** family) — exact part pinned once real MCU/GNSS current draw is measured against the §2.2 assumptions |
-| Inductor | ≈2.2–4.7 µH, saturation current ≥ 0.5 A (above the 150 mA peak design figure with generous margin, since this part is small and cheap to over-spec) |
+| Finalized part | TI **TPS62822DLCR** — 2.4–5.5 V input, 2 A synchronous step-down converter, DCS-Control™ topology, 1% output accuracy, VSON-HR package |
+| Automotive qualification — flagged explicitly | Commercial/industrial grade, **not** AEC-Q100 qualified — the earlier placeholder called out a "TPS6282x-Q1" automotive-qualified class; the part actually finalized here is the non-Q1 TPS62822. Same note as §8.4: this is downstream of the protection stage and never sees raw VIN or load-dump transients directly, which is the mitigating factor for accepting a non-automotive part here, but it's still worth stating as a conscious choice rather than leaving it implicit |
+| Current margin | 2 A rated vs. the 150 mA peak design figure (§2.2) — substantial deliberate over-spec; this rail's headroom is not the tight constraint in this design (the modem rail is), so the margin here is generous by default rather than tightly derived |
+| Input compatibility | 5.5 V absolute max input vs. the nominal 5.0 V pre-regulator output — roughly 0.5 V of headroom to the part's own input ceiling. Should be checked against the pre-regulator's worst-case output overshoot/ripple (not just its nominal 5.0 V) once the pre-regulator's transient response is characterized, since this is tighter headroom than the modem-rail buck sees on the same 5 V input (§8.6) |
+| Inductor | 2.2 µH, per the finalized design (within the family's supported small-inductor range; saturation current rating to be selected above the 150 mA peak with generous margin, since this part is small and cheap to over-spec) |
 | Output capacitance | Ceramic bulk (e.g. 22 µF) at the buck output, plus 100 nF local at each IC per §6.1 — not sized by burst current the way the modem rail is, since this rail's peak is comparatively small |
 | Fallback component (contingent) | Small LC post-filter or a low-dropout linear "cleanup" stage at the GNSS supply pin specifically, only if T5/validation shows switching-noise coupling into GNSS sensitivity (§5.4, §6.3) |
 
@@ -206,16 +229,37 @@ Parts below are named as concrete, real, currently-orderable examples to make th
 
 | Parameter | Selection |
 |---|---|
-| Representative part class | Fast-transient-response synchronous buck sized for ≥6 A, optimized for low output voltage / high current point-of-load use from a clean 5 V input (representative class: TI **TPS62912**-class DCS-Control buck; automotive-qualified equivalent to be confirmed at schematic-capture time) |
-| Inductor | ≈1.5–2.2 µH, saturation current ≥ 6 A (above the 3.75 A design figure with margin), low DCR — small inductance and higher switching frequency chosen specifically for fast transient response to the TX-burst load step, per §5.3 |
+| Finalized part | TI **TPS565201DDCR** — 4.5–17 V input, 5 A synchronous step-down converter, D-CAP2™ adaptive on-time control, 500 kHz, 31 mΩ high-side switch, SOT-23-6 package |
+| Current margin against design peak | 5 A rated device capability vs. the 3.75 A design figure (§3) — this is the one part on this rail where margin actually matters, since the 3.75 A figure is the single most consequential sizing decision in the whole design (§5.3). The 5 A rating clears it with margin to spare; this should still be re-checked against the part's transient/peak-current behavior specifically during the T5 burst test, since a datasheet's steady-state current rating and its transient response during a fast 1 ms load step are not automatically the same guarantee |
+| Why D-CAP2, not a fixed-frequency current-mode part like the pre-regulator | D-CAP2 (adaptive on-time) control is specifically suited to fast load-step response with minimal external compensation, which is the property this rail needs most for the TX-burst transient (§5.3) — consistent with the original rationale for wanting a "fast-transient-response" part class here, just now pinned to a specific control topology and part |
+| Automotive qualification — flagged explicitly | Commercial/industrial grade, not AEC-Q100 qualified — same category of trade-off as §8.4/§8.5. This part only ever sees the clean, already-protected 5 V rail (see rationale below), which is the argument for why this is a more acceptable place to accept a non-automotive part than, say, the pre-regulator itself |
+| Inductor | 2.2 µH, per the finalized design — within the ≈1.5–2.2 µH range called for in §5.3 for fast transient response to the TX-burst load step; saturation current rating still needs to clear the 3.75 A design figure with margin at schematic capture |
 | Output / module-side capacitance | Per Quectel's own specification (§6.1): 100 µF low-ESR bulk (ESR ≈ 0.7 Ω) + MLCC array (100 nF, 33 pF, 10 pF) directly at the EC200U VBAT pins — non-negotiable — plus an additional local bulk capacitor at the buck's own output for control-loop stability, physically distinct from the module-side capacitance |
-| Why this part class over the pre-regulator's part | The pre-regulator (8.4) must survive the full wide VIN range and load-dump events directly; the +3V8 buck only ever sees the clean, already-protected 5 V rail, so it can be optimized purely for current capability and transient speed rather than input voltage range |
+| Why this part over the pre-regulator's part | The pre-regulator (8.4) must survive the full wide VIN range and load-dump events directly; the +3V8 buck only ever sees the clean, already-protected 5 V rail, so it can be optimized purely for current capability and transient speed (D-CAP2, 500 kHz) rather than input voltage range or automotive qualification |
 
 ### 8.7 Supervisor / Sequencing IC
 
 | Parameter | Selection |
 |---|---|
-| Representative part | TI **TPS3808**-class adjustable-threshold voltage supervisor (automotive-qualified equivalent to be confirmed at schematic-capture time), threshold set via external resistor divider off +3V3, delay set via external capacitor on the delay pin |
-| Threshold setting | Set to trip below +3V3's regulation point but above the MCU's own minimum operating voltage, so the supervisor acts before the MCU itself would misbehave |
-| Delay setting | Sized longer than +3V3's worst-case power-up ramp time across the full VIN range (README §4, assumption S3) — the actual capacitor value is derived from the specific buck's measured ramp time, not assumed at the architecture stage |
-| Output behavior | Gates both MCU reset and the +3V8 buck's enable pin; per README assumption S4, must behave as a one-way gate per power cycle rather than re-triggering on minor +3V3 ripple |
+| Finalized part | TI **TPS3808G33DBVR** — fixed-threshold (3.07 V typ. trip, factory-trimmed for a 3.3 V rail), programmable-delay supervisor, 6-pin SOT-23, 1.65–6.5 V operating supply range, 2.4 µA quiescent current |
+| Threshold setting (revised from placeholder) | The earlier revision of this document called for an adjustable-threshold part with an external resistor divider off +3V3. The finalized "G33" variant instead uses a **factory-trimmed fixed threshold** (3.07 V typical, ~93% of the 3.3 V nominal rail) — this removes the external divider and its associated tolerance stack-up entirely, at the cost of no longer being field-adjustable if the monitored rail's nominal voltage ever changes. Given the rail is fixed at 3.3 V by design, this is a straightforward simplification, not a compromise |
+| Delay setting | Set via an external capacitor on the CT pin (or one of two fixed preset delays if CT is tied to VDD or left floating), sized longer than +3V3's worst-case power-up ramp time across the full VIN range (README §4, assumption S3) — the actual capacitor value is still derived from the specific buck's measured ramp time, not assumed at the architecture stage |
+| Automotive qualification | Commercial grade (TPS3808G33DBVR); an automotive-qualified equivalent exists in TI's portfolio (TPS3808G33Q-Q1-class part) as a pin-compatible upgrade path if required at production qualification — same category of trade-off as §8.4–§8.6 |
+| Output behavior | RESET output gates both MCU reset and the +3V8 buck's enable pin; per README assumption S4, must behave as a one-way gate per power cycle rather than re-triggering on minor +3V3 ripple — this is inherent to the part's RESET-then-delay behavior (RESET reasserts and the full delay must re-elapse only if SENSE actually drops back below threshold, not on sub-threshold ripple) |
+
+### 8.8 Automotive-Qualification Summary (cross-cutting note)
+
+The finalized part list is a mix of AEC-qualified and commercial-grade silicon, which is worth stating in one place rather than leaving scattered across §8.1–8.7, since it's the kind of thing that should be a deliberate, defensible decision rather than something that falls out of whichever part was easiest to source first:
+
+| Part | Automotive-qualified? |
+|---|---|
+| TVS — SM8S36CA | Yes (AEC-Q101) |
+| Ideal-diode controller — LM74610-Q1 | Yes (AEC-Q100) |
+| Reverse-polarity FET — CSD18540Q5B | No — TI does not currently offer an AEC-Q101-qualified part in this specific NexFET family |
+| eFuse — TPS26630RGER | No (industrial-grade; IEC 61010-1 / UL1310-relevant surge and fire-safety features, but not AEC-Q100) |
+| Pre-regulator — TPS54560DDAR | No — pin-compatible -Q1 automotive variant exists as an upgrade path |
+| +3V3 buck — TPS62822DLCR | No — same family includes no -Q1 variant at this exact part number; nearest automotive alternative would need to be resourced |
+| +3V8 buck — TPS565201DDCR | No |
+| Supervisor — TPS3808G33DBVR | No — pin-compatible -Q1 automotive variant exists as an upgrade path |
+
+Only the input-facing surge-critical parts (TVS, ideal-diode controller) are automotive-qualified in this finalized selection; everything downstream of the eFuse is commercial/industrial grade. This is consistent with the margin philosophy in §3 (A7 — asset-tracking hardware, not a safety-critical ECU) in that the parts seeing the harshest, least-predictable electrical environment directly are the ones held to the automotive bar, while parts operating from an already-protected, already-regulated rail are not automatically required to carry the same qualification and cost. Whether this split is acceptable for the eventual production BOM — as opposed to just this design-stage selection — is a call that should be revisited explicitly against the product's actual reliability/warranty requirements, not inherited silently from whichever part was easiest to source at this stage.
