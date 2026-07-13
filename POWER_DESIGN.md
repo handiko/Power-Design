@@ -1,4 +1,4 @@
-# POWER DESIGN — EC200U Telematics Tracker
+# POWER_DESIGN.md — EC200U Telematics Tracker
 
 ## 1. Rail Definitions
 
@@ -149,3 +149,73 @@ Architecture-level grounding intent, to be carried into layout rather than left 
 | +3V8 buck output (local) | Additional bulk capacitor sized to the buck's own control-loop stability requirement | Converter stability, separate from the module requirement above |
 | +3V3 buck output | Standard bulk + 100 nF local per IC | Standard MCU/peripheral decoupling practice |
 | +5V pre-regulator output | Bulk sized to supply both downstream bucks' combined transient demand (≈2.64 A) without excessive droop | Two-stage architecture requirement |
+
+## 8. Critical Component Selection
+
+This section maps every block in the power-path diagram to a specific, orderable-class part (or a tightly bounded part family) plus the critical passives around it. "Critical" here means: parts whose value or rating is derived from the sizing math above, not left at a generic default. Common decoupling caps and generic resistors are intentionally excluded, per scope — those are populated during layout, not architecture.
+
+Parts below are named as concrete, real, currently-orderable examples to make the selection defensible and traceable to a datasheet, not as a locked BOM — the exact orderable variant (package, exact current-limit/threshold option) should be confirmed against the vendor's current parametric table at schematic-capture time.
+
+### 8.1 Input TVS
+
+| Parameter | Selection |
+|---|---|
+| Representative part | Vishay/SMC **SM8S36A** (DO-218AB), automotive-qualified, unidirectional load-dump TVS |
+| Standoff voltage | 36 V — clears both 12 V and 24 V nominal systems with margin |
+| Clamping voltage | ≈58 V — must stay below the reverse-polarity FET's and eFuse's absolute-max voltage rating (see 8.2, 8.3) |
+| Peak pulse current | 114 A (large-package DO-218AB, sized for ISO 7637-2 pulse 5b / ISO 16750-2 load-dump energy, not just small ESD-class transients) |
+| Orientation note | Unidirectional, oriented to clamp positive over-voltage only — reverse-battery current is handled by the dedicated reverse-polarity stage (8.2), not by this part |
+
+### 8.2 Reverse Polarity — Controller + FET
+
+| Parameter | Selection |
+|---|---|
+| Controller | TI **LM74610-Q1**, AEC-Q100 qualified ideal-diode controller, drives an external high-side N-channel MOSFET, ~2 µs turn-off response on reverse-bias detection |
+| External FET | 40–60 V-class automotive N-channel MOSFET, low RDS(on) (representative example: TI **CSD18540Q5B**-class, ~4–5 mΩ RDS(on), 40 V rating) |
+| FET voltage rating basis | Must exceed the TVS clamping voltage from 8.1 (≈58 V) with margin — this is why a 60 V-class FET, not a 40 V-class one, is the safer default unless the clamp voltage is independently re-verified against a 40 V part |
+| Conduction loss at design current | At 3.75 A (design peak) and ~5 mΩ RDS(on): P = I²R ≈ 70 mW — negligible compared to the 1–1.5 W a series Schottky would dissipate at the same current |
+
+### 8.3 Overcurrent — eFuse
+
+| Parameter | Selection |
+|---|---|
+| Representative part | TI **TPS26630 / TPS26633** (TPS2663x family), 4.5–60 V, 6 A, 31 mΩ integrated FET eFuse |
+| Current limit setting | Set via external RILM resistor to ~4 A, above the 3.75 A design peak (8.2/§3 margin figure) with enough headroom to avoid nuisance trips on a legitimate TX burst (validated in `VALIDATION_PLAN.md` T7) |
+| Why this family specifically | Integrates adjustable OVLO, adjustable current limit, fault-flag output, and reverse-current blocking in one part — matches the requirement in §4.3/§4.4 for a fault event the MCU can log, not just a fuse that silently opens |
+| Response time | Microsecond-class trip, per datasheet — orders of magnitude faster than a PTC, consistent with the justification in §4.3 |
+
+### 8.4 Pre-Regulator (VIN → +5V)
+
+| Parameter | Selection |
+|---|---|
+| Representative part | TI **TPS54360B-Q1** (60 V, 3.5 A, AEC-Q100, synchronous, survives load-dump pulses to 65 V per ISO 7637) — if the full 3.3 A design margin figure from §3 needs more headroom, the pin-compatible 5 A sibling in the same family is the direct upgrade path |
+| Inductor | ≈10 µH, saturation current rating ≥ 5 A (above the 3.3 A design figure with margin), low DCR to limit conduction loss at the reflected ≈2.64 A peak |
+| Output capacitance | Ceramic bulk (e.g. 2×22 µF, X7R, rated above 5 V with derating margin) plus additional bulk capacitance sized to absorb both downstream bucks' combined transient demand without excessive droop, per §6.1 |
+| Why synchronous | Per §5.2 — catch-diode conduction loss at this current level is a real efficiency/thermal cost the synchronous topology avoids |
+
+### 8.5 +3V3 Buck (MCU / digital rail)
+
+| Parameter | Selection |
+|---|---|
+| Representative part class | Small synchronous buck, ≤6 V input, ≥1 A output, automotive-qualified (representative class: TI **TPS6282x-Q1** family) — exact part pinned once real MCU/GNSS current draw is measured against the §2.2 assumptions |
+| Inductor | ≈2.2–4.7 µH, saturation current ≥ 0.5 A (above the 150 mA peak design figure with generous margin, since this part is small and cheap to over-spec) |
+| Output capacitance | Ceramic bulk (e.g. 22 µF) at the buck output, plus 100 nF local at each IC per §6.1 — not sized by burst current the way the modem rail is, since this rail's peak is comparatively small |
+| Fallback component (contingent) | Small LC post-filter or a low-dropout linear "cleanup" stage at the GNSS supply pin specifically, only if T5/validation shows switching-noise coupling into GNSS sensitivity (§5.4, §6.3) |
+
+### 8.6 +3V8 Buck (EC200U modem rail)
+
+| Parameter | Selection |
+|---|---|
+| Representative part class | Fast-transient-response synchronous buck sized for ≥6 A, optimized for low output voltage / high current point-of-load use from a clean 5 V input (representative class: TI **TPS62912**-class DCS-Control buck; automotive-qualified equivalent to be confirmed at schematic-capture time) |
+| Inductor | ≈1.5–2.2 µH, saturation current ≥ 6 A (above the 3.75 A design figure with margin), low DCR — small inductance and higher switching frequency chosen specifically for fast transient response to the TX-burst load step, per §5.3 |
+| Output / module-side capacitance | Per Quectel's own specification (§6.1): 100 µF low-ESR bulk (ESR ≈ 0.7 Ω) + MLCC array (100 nF, 33 pF, 10 pF) directly at the EC200U VBAT pins — non-negotiable — plus an additional local bulk capacitor at the buck's own output for control-loop stability, physically distinct from the module-side capacitance |
+| Why this part class over the pre-regulator's part | The pre-regulator (8.4) must survive the full wide VIN range and load-dump events directly; the +3V8 buck only ever sees the clean, already-protected 5 V rail, so it can be optimized purely for current capability and transient speed rather than input voltage range |
+
+### 8.7 Supervisor / Sequencing IC
+
+| Parameter | Selection |
+|---|---|
+| Representative part | TI **TPS3808**-class adjustable-threshold voltage supervisor (automotive-qualified equivalent to be confirmed at schematic-capture time), threshold set via external resistor divider off +3V3, delay set via external capacitor on the delay pin |
+| Threshold setting | Set to trip below +3V3's regulation point but above the MCU's own minimum operating voltage, so the supervisor acts before the MCU itself would misbehave |
+| Delay setting | Sized longer than +3V3's worst-case power-up ramp time across the full VIN range (README §4, assumption S3) — the actual capacitor value is derived from the specific buck's measured ramp time, not assumed at the architecture stage |
+| Output behavior | Gates both MCU reset and the +3V8 buck's enable pin; per README assumption S4, must behave as a one-way gate per power cycle rather than re-triggering on minor +3V3 ripple |
