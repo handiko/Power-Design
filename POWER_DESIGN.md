@@ -1,4 +1,6 @@
-# POWER DESIGN — EC200U Telematics Tracker
+# POWER_DESIGN.md — EC200U Telematics Tracker
+
+> **Revision note:** This revision replaces the representative/placeholder part classes from the prior draft with the finalized component selection (§8), adds two design elements that weren't in the prior draft — a bidirectional input TVS with a common-mode EMI filter stage (§4.1/§8.1), and an eFuse PGOOD signal gating the pre-regulator's enable pin (§4.5/§8.3/§8.4) — and adds a short thermal note (§9, bonus deliverable) estimating power-path dissipation during normal operation using the finalized parts' actual datasheet parameters. See `README.md` §3–4 and §6 for the corresponding architecture-diagram and sequencing-assumption updates.
 
 ## 1. Rail Definitions
 
@@ -186,7 +188,7 @@ Parts below are named as concrete, real, currently-orderable examples to make th
 | Controller | TI **LM74610-Q1**, AEC-Q100 qualified ideal-diode controller, drives an external high-side N-channel MOSFET, ~2 µs turn-off response on reverse-bias detection |
 | External FET | 40–60 V-class automotive N-channel MOSFET, low RDS(on) (representative example: TI **CSD18540Q5B**-class, ~4–5 mΩ RDS(on), 40 V rating) |
 | FET voltage rating basis | Must exceed the TVS clamping voltage from 8.1 (≈58 V) with margin — this is why a 60 V-class FET, not a 40 V-class one, is the safer default unless the clamp voltage is independently re-verified against a 40 V part |
-| Conduction loss at design current | At 3.75 A (design peak) and ~5 mΩ RDS(on): P = I²R ≈ 70 mW — negligible compared to the 1–1.5 W a series Schottky would dissipate at the same current |
+| Conduction loss at design current | At 3.75 A (design peak) and CSD18540Q5B's actual RDS(on) — 2.2 mΩ max at VGS = 10 V, per datasheet, revised down from the ≈5 mΩ placeholder used before part finalization: P = I²R ≈ **31 mW** — negligible compared to the 1–1.5 W a series Schottky would dissipate at the same current, and lower than originally estimated |
 
 ### 8.3 Overcurrent — eFuse
 
@@ -261,3 +263,31 @@ The finalized part list is a mix of AEC-qualified and commercial-grade silicon, 
 | Supervisor — TPS3808G33DBVR | No — pin-compatible -Q1 automotive variant exists as an upgrade path |
 
 Only the input-facing surge-critical parts (TVS, ideal-diode controller) are automotive-qualified in this finalized selection; everything downstream of the eFuse is commercial/industrial grade. This is consistent with the margin philosophy in §3 (A7 — asset-tracking hardware, not a safety-critical ECU) in that the parts seeing the harshest, least-predictable electrical environment directly are the ones held to the automotive bar, while parts operating from an already-protected, already-regulated rail are not automatically required to carry the same qualification and cost. Whether this split is acceptable for the eventual production BOM — as opposed to just this design-stage selection — is a call that should be revisited explicitly against the product's actual reliability/warranty requirements, not inherited silently from whichever part was easiest to source at this stage.
+
+## 9. Thermal Note (bonus — power stages only)
+
+This is a design-stage estimate of self-heating from the power path during **normal (average-current) operation**, not a full thermal analysis — no board copper area, enclosure volume, or airflow model is assumed yet, since none of that is fixed at this stage. It exists to sanity-check that nothing in the power path is thermally marginal by inspection, before the real answer comes from bench measurement (`VALIDATION_PLAN.md` T9).
+
+### 9.1 Estimated dissipation at normal operating point
+
+Using the average-current figures from §2 (150 mA on +3V8, 60 mA on +3V3 — themselves engineering assumptions, see §2.2) and the same 90% per-stage buck efficiency assumption used throughout §2.3, at a 12 V nominal input:
+
+| Stage | Basis | Estimated dissipation |
+|---|---|---|
+| +3V8 buck (TPS565201DDCR) | P_out = 3.8 V × 0.15 A = 0.57 W at 90% eff. | ≈ 63 mW |
+| +3V3 buck (TPS62822DLCR) | P_out = 3.3 V × 0.06 A = 0.198 W at 90% eff. | ≈ 22 mW |
+| Pre-regulator (TPS54560DDAR) | Delivers the 0.853 W combined downstream demand (§2.3) at 90% eff. | ≈ 95 mW |
+| Reverse-polarity FET (CSD18540Q5B) | I²R at ≈79 mA average system input current (reflected through both conversion stages) and 2.2 mΩ RDS(on) | ≈ 14 µW — negligible |
+| eFuse (TPS26630RGER) | I²R at the same ≈79 mA and 31 mΩ RDS(on) | ≈ 0.2 mW — negligible |
+| Quiescent overhead (supervisor, ideal-diode controller, eFuse bias, buck no-load Iq) | Sum of datasheet quiescent currents (µA-class per part) at their respective rail voltages | ≈ 1–2 mW, order-of-magnitude |
+| **Total, normal operation** | Sum of the above | **≈ 0.18–0.19 W** across the whole power path |
+
+### 9.2 What this does and doesn't tell us
+
+The pre-regulator and the two downstream bucks dominate the normal-operation heat budget — expected, since they're the only stages doing real conversion work rather than just passing current through a low RDS(on) switch. The reverse-polarity FET and eFuse are thermally trivial under normal load; their thermal relevance is almost entirely during a fault or burst event, not steady-state operation (see below), which is why T9's pass condition explicitly checks them under sustained load rather than assuming this average-case number covers that case.
+
+Total normal-operation dissipation across the whole power path (≈0.19 W) is small relative to what a sealed, vehicle-mounted enclosure (A6) can typically reject through the housing without forced air — but "typically" is doing real work in that sentence, since actual case-to-ambient rise depends on enclosure material, volume, and mounting, none of which are fixed yet. This estimate says the power path is not an obviously bad thermal actor by inspection; it does not replace T9, which measures actual case/junction temperature on real hardware at maximum rated ambient.
+
+### 9.3 Burst-mode dissipation — why it's excluded from the normal-operation total above
+
+During the ~1 ms modem TX-burst (3.75 A design peak, §3), instantaneous dissipation in the reverse-polarity FET and eFuse is higher — for example, the eFuse's 31 mΩ RDS(on) at 3.75 A is ≈436 mW instantaneous, and the FET's is ≈31 mW (§8.2) — but at a duty cycle low enough (a ~1 ms event within a multi-second reporting interval) that its contribution to *average* dissipation and steady-state case temperature is negligible next to the continuous conversion losses in §9.1. This is a duty-cycle argument, not a claim that burst-mode junction temperature is unconditionally fine — a component with too little thermal mass or too high a thermal resistance could still see a meaningful instantaneous temperature spike even from a short pulse repeated often enough. That's exactly what T9 (sustained profile) and the T5/T7 burst-repetition tests are there to catch on real hardware rather than by estimate.

@@ -87,6 +87,6 @@ Full reasoning lives in `POWER_DESIGN.md`; this is the short version for orienta
 | File | Contents |
 |---|---|
 | `README.md` | This file — assumptions, architecture overview, sequencing assumptions, rail dependency, rationale summary |
-| `POWER_DESIGN.md` | Current budget, protection justification, rail sizing math, decoupling placement, grounding/return-path intent, modem-collapse avoidance |
+| `POWER_DESIGN.md` | Current budget, protection justification, rail sizing math, decoupling placement, grounding/return-path intent, modem-collapse avoidance, thermal note (bonus) |
 | `VALIDATION_PLAN.md` | Test matrix, pass/fail thresholds, worst-case stress scenario, risk/fallback plan |
-| Power-path schematic | Power path only, input connector through both regulated rails |
+| Power-path schematic | Power path only, input connector through both regulated rails (not included in this document package) |
