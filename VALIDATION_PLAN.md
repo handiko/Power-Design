@@ -1,4 +1,4 @@
-# VALIDATION_PLAN.md — EC200U Telematics Tracker Power Subsystem
+# VALIDATION PLAN — EC200U Telematics Tracker Power Subsystem
 
 ## 1. Validation Philosophy
 
