@@ -25,9 +25,9 @@ flowchart TB
     A["Input Connector<br/>12/24V nominal"] --> B["TVS + EMI Filter<br/>Surge suppression"]
     B --> C["Ideal-Diode + FET<br/>Reverse polarity"]
     C --> D["eFuse<br/>Overcurrent limit"]
-    D --> E["Pre-regulator Buck<br/>5V intermediate rail"]
-    E --> F["3.3V Buck<br/>MCU + digital rail"]
-    E --> G["3.8V Buck<br/>EC200U VBAT rail"]
+    D --> E["Pre-regulator Buck<br/>+5V intermediate rail"]
+    E --> F["+3V3 Buck<br/>MCU + digital rail"]
+    E --> G["+3V8 Buck<br/>EC200U VBAT rail"]
     F --> H["Supervisor IC<br/>UVLO + reset"]
     H -. enable, delayed .-> G
 ```
@@ -40,11 +40,11 @@ The architecture relies on the following sequencing behavior being true; each as
 
 | # | Sequencing assumption | Why it has to hold |
 |---|---|---|
-| S1 | V5 (pre-regulator) reaches regulation before either downstream buck is enabled | Downstream bucks are not specified to operate correctly from a ramping, not-yet-regulated input |
-| S2 | V3V3 reaches regulation and the supervisor releases MCU reset **before** the modem enable/PWRKEY line is allowed to assert | The MCU must be alive and able to arbitrate a fault before the noisiest, highest-current rail in the system turns on |
-| S3 | The supervisor's release delay is longer than V3V3's own worst-case power-up ramp time (across the full input voltage range in A1) | A delay shorter than the ramp time would let the modem enable race the MCU rail instead of waiting for it |
-| S4 | Once released, modem enable is a one-way gate for that power cycle — it does not re-trigger on minor V3V3 ripple | Without this, a full reset-and-resequence could be triggered by common-mode noise rather than an actual undervoltage event, which is a self-inflicted reset loop distinct from the modem-collapse case in Section 6 below |
-| S5 | No rail relies on firmware to complete its own sequencing | Firmware cannot run until V3V3 is already stable, so any rail whose sequencing depended on firmware would have a circular dependency on itself |
+| S1 | +5V (pre-regulator) reaches regulation before either downstream buck is enabled | Downstream bucks are not specified to operate correctly from a ramping, not-yet-regulated input |
+| S2 | +3V3 reaches regulation and the supervisor releases MCU reset **before** the modem enable/PWRKEY line is allowed to assert | The MCU must be alive and able to arbitrate a fault before the noisiest, highest-current rail in the system turns on |
+| S3 | The supervisor's release delay is longer than +3V3's own worst-case power-up ramp time (across the full input voltage range in A1) | A delay shorter than the ramp time would let the modem enable race the MCU rail instead of waiting for it |
+| S4 | Once released, modem enable is a one-way gate for that power cycle — it does not re-trigger on minor +3V3 ripple | Without this, a full reset-and-resequence could be triggered by common-mode noise rather than an actual undervoltage event, which is a self-inflicted reset loop distinct from the modem-collapse case in Section 6 below |
+| S5 | No rail relies on firmware to complete its own sequencing | Firmware cannot run until +3V3 is already stable, so any rail whose sequencing depended on firmware would have a circular dependency on itself |
 
 These are assumptions the schematic and component selection must satisfy, not behaviors that emerge automatically from picking "a supervisor IC" — S3 in particular has to be checked against the specific supervisor's programmable delay range and the specific buck's startup time once real parts are chosen.
 
@@ -55,9 +55,9 @@ Stating explicitly which failures are total and which are recoverable was one of
 | Rail | If this rail fails... | Consequence | Recoverable without a full power cycle? |
 |---|---|---|---|
 | VIN / protection stage | System has no input at all | Total system failure | N/A — no power, nothing to recover |
-| V5 (pre-regulator) | Both downstream rails lose their source | Total system failure — both MCU and modem go down together | No |
-| V3V3 (MCU) | MCU cannot run; nothing can arbitrate faults, log data, or re-enable the modem | Total system failure by definition — this rail is not allowed to degrade gracefully, only to be protected as strongly as possible upstream (dedicated supervisor, independent from modem rail) | No |
-| V3V8 (modem) | Modem browns out, resets, or fails to attach | **Degraded, not total.** MCU stays alive, GNSS logging continues, data buffers to local storage; firmware retries modem power-up on a backoff timer | Yes — this is the one rail this architecture is explicitly designed to let fail without taking the system down |
+| +5V (pre-regulator) | Both downstream rails lose their source | Total system failure — both MCU and modem go down together | No |
+| +3V3 (MCU) | MCU cannot run; nothing can arbitrate faults, log data, or re-enable the modem | Total system failure by definition — this rail is not allowed to degrade gracefully, only to be protected as strongly as possible upstream (dedicated supervisor, independent from modem rail) | No |
+| +3V8 (modem) | Modem browns out, resets, or fails to attach | **Degraded, not total.** MCU stays alive, GNSS logging continues, data buffers to local storage; firmware retries modem power-up on a backoff timer | Yes — this is the one rail this architecture is explicitly designed to let fail without taking the system down |
 
 This table is the reason the modem rail gets its own regulator, its own bulk capacitance strategy, and a firmware-level retry expectation, while the MCU rail gets a dedicated hardware supervisor and no fallback path at all — the two rails are protected to different standards on purpose, because they fail differently.
 
