@@ -1,7 +1,5 @@
 # POWER DESIGN — EC200U Telematics Tracker
 
-> **Revision note:** This revision replaces the representative/placeholder part classes from the prior draft with the finalized component selection (§8), and adds two design elements that weren't in the prior draft: a bidirectional input TVS with a common-mode EMI filter stage (§4.1/§8.1), and an eFuse PGOOD signal gating the pre-regulator's enable pin (§4.5/§8.3/§8.4). See `README.md` §3–4 and §6 for the corresponding architecture-diagram and sequencing-assumption updates.
-
 ## 1. Rail Definitions
 
 | Rail | Nominal Voltage | Feeds | Regulation |
