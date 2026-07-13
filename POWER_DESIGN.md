@@ -1,6 +1,4 @@
-# POWER_DESIGN.md — EC200U Telematics Tracker
-
-> **Revision note:** This revision replaces the representative/placeholder part classes from the prior draft with the finalized component selection (§8), adds two design elements that weren't in the prior draft — a bidirectional input TVS with a common-mode EMI filter stage (§4.1/§8.1), and an eFuse PGOOD signal gating the pre-regulator's enable pin (§4.5/§8.3/§8.4) — and adds a short thermal note (§9, bonus deliverable) estimating power-path dissipation during normal operation using the finalized parts' actual datasheet parameters. See `README.md` §3–4 and §6 for the corresponding architecture-diagram and sequencing-assumption updates.
+# POWER DESIGN — EC200U Telematics Tracker
 
 ## 1. Rail Definitions
 
