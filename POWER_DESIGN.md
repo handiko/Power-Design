@@ -262,7 +262,7 @@ The finalized part list is a mix of AEC-qualified and commercial-grade silicon, 
 
 Only the input-facing surge-critical parts (TVS, ideal-diode controller) are automotive-qualified in this finalized selection; everything downstream of the eFuse is commercial/industrial grade. This is consistent with the margin philosophy in §3 (A7 — asset-tracking hardware, not a safety-critical ECU) in that the parts seeing the harshest, least-predictable electrical environment directly are the ones held to the automotive bar, while parts operating from an already-protected, already-regulated rail are not automatically required to carry the same qualification and cost. Whether this split is acceptable for the eventual production BOM — as opposed to just this design-stage selection — is a call that should be revisited explicitly against the product's actual reliability/warranty requirements, not inherited silently from whichever part was easiest to source at this stage.
 
-## 9. Thermal Note (bonus — power stages only)
+## 9. Thermal Note
 
 This is a design-stage estimate of self-heating from the power path during **normal (average-current) operation**, not a full thermal analysis — no board copper area, enclosure volume, or airflow model is assumed yet, since none of that is fixed at this stage. It exists to sanity-check that nothing in the power path is thermally marginal by inspection, before the real answer comes from bench measurement (`VALIDATION_PLAN.md` T9).
 
