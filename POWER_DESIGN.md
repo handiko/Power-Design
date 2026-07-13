@@ -1,4 +1,4 @@
-# POWER_DESIGN.md — EC200U Telematics Tracker
+# POWER DESIGN — EC200U Telematics Tracker
 
 ## 1. Rail Definitions
 
