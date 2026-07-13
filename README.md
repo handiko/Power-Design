@@ -22,10 +22,11 @@ These were fixed first, before any topology or component decision, because every
 
 ```mermaid
 flowchart TB
-    A["Input Connector<br/>12/24V nominal"] --> B["TVS + EMI Filter<br/>Surge suppression"]
+    A["Input Connector<br/>12/24V nominal"] --> B["Bidirectional TVS +<br/>CM Choke + EMI Filter"]
     B --> C["Ideal-Diode + FET<br/>Reverse polarity"]
     C --> D["eFuse<br/>Overcurrent limit"]
     D --> E["Pre-regulator Buck<br/>+5V intermediate rail"]
+    D -. PGOOD, enable .-> E
     E --> F["+3V3 Buck<br/>MCU + digital rail"]
     E --> G["+3V8 Buck<br/>EC200U VBAT rail"]
     F --> H["Supervisor IC<br/>UVLO + reset"]
@@ -34,12 +35,18 @@ flowchart TB
 
 Reading order: energy is progressively "narrowed" — from an uncontrolled, wide-range, bidirectional-fault-capable input down to two clean, narrow-tolerance rails. Each stage exists to remove one specific degree of freedom (transient amplitude, polarity, current magnitude, voltage tolerance) before the next stage has to deal with it.
 
+Two additions relative to earlier revisions of this diagram, both carried through into `POWER_DESIGN.md`:
+
+- **The TVS is bidirectional, not unidirectional**, and is followed by a common-mode choke with differential filter capacitors across its terminals. The bidirectional clamp addresses negative-going transients (e.g. ISO 7637-2 pulses 1 and 2a/2b) that a unidirectional part would pass through to the reverse-polarity stage unclamped; the choke + capacitor combination is a first-pass conducted-EMI filter, not a redundant surge stage — surge energy is still the TVS's job.
+- **The eFuse's PGOOD output gates the pre-regulator's enable pin.** This is a sequencing addition, not just a protection one — see assumption S0 in Section 4.
+
 ## 4. Startup Sequencing Assumptions
 
 The architecture relies on the following sequencing behavior being true; each assumption is stated explicitly because the design would fail its purpose if any one of them were violated.
 
 | # | Sequencing assumption | Why it has to hold |
 |---|---|---|
+| S0 | The eFuse's PGOOD output gates the pre-regulator's enable pin — the pre-regulator is not allowed to start switching until the eFuse reports no fault (no overcurrent/overvoltage condition, FET fully on) | Without this gate, the pre-regulator could start ramping into an already-faulted protection stage (e.g. mid-inrush, or during an eFuse current-limit event) instead of a clean, current-limited-good input. This pushes the "is the input actually healthy" decision to the one component whose job that is, rather than leaving the pre-regulator to find out the hard way |
 | S1 | +5V (pre-regulator) reaches regulation before either downstream buck is enabled | Downstream bucks are not specified to operate correctly from a ramping, not-yet-regulated input |
 | S2 | +3V3 reaches regulation and the supervisor releases MCU reset **before** the modem enable/PWRKEY line is allowed to assert | The MCU must be alive and able to arbitrate a fault before the noisiest, highest-current rail in the system turns on |
 | S3 | The supervisor's release delay is longer than +3V3's own worst-case power-up ramp time (across the full input voltage range in A1) | A delay shorter than the ramp time would let the modem enable race the MCU rail instead of waiting for it |
@@ -72,6 +79,8 @@ Full reasoning lives in `POWER_DESIGN.md`; this is the short version for orienta
 - **Hardware supervisor gates modem enable off the MCU rail, not firmware.** Removes a circular dependency — the rail firmware needs to exist can't be sequenced by firmware that doesn't exist yet.
 - **Modem rail sized to 3.0 A (GSM-fallback figure), not 2.0 A (LTE-only figure).** Coverage gaps that trigger 2G fallback are disproportionately likely in exactly the environments this product operates in. Cost: larger inductor, higher-current-rated FETs.
 - **No supercap/holdup stage.** A modem brownout costs a missed report cycle, recoverable by firmware buffer-and-retry — not a safety event. Adding holdup capacitance would be solving a firmware-solvable problem in (more expensive) silicon.
+- **Bidirectional input TVS, not unidirectional, plus a common-mode choke and differential filter caps.** A unidirectional TVS only clamps one polarity of transient; ISO 7637-2 includes negative-going pulses (1, 2a, 2b) that a unidirectional part passes straight through to the reverse-polarity stage. Going bidirectional clamps both directions at the one point in the circuit designed to absorb transient energy, rather than asking the ideal-diode controller's reverse-bias detection to also serve as a secondary transient clamp. Cost: bidirectional TVS parts clamp slightly more aggressively at a given standoff voltage than their unidirectional counterparts, which was factored into the voltage-margin check against the downstream FET (see `POWER_DESIGN.md` §4.1/§8.1).
+- **eFuse PGOOD gates the pre-regulator enable pin, not just an MCU-readable fault flag.** The fault flag alone tells firmware something went wrong after the fact; gating the pre-regulator's enable directly in hardware means the pre-regulator is structurally prevented from switching into an unresolved input fault, instead of relying on firmware (which isn't running yet at this point in the boot sequence anyway — see S5) to notice and react. Cost: none in components, since PGOOD is a native output of the selected eFuse; the cost is one additional sequencing dependency to verify at power-up (see assumption S0 and `VALIDATION_PLAN.md` T8).
 
 ## 7. Document Map
 
@@ -80,4 +89,4 @@ Full reasoning lives in `POWER_DESIGN.md`; this is the short version for orienta
 | `README.md` | This file — assumptions, architecture overview, sequencing assumptions, rail dependency, rationale summary |
 | `POWER_DESIGN.md` | Current budget, protection justification, rail sizing math, decoupling placement, grounding/return-path intent, modem-collapse avoidance |
 | `VALIDATION_PLAN.md` | Test matrix, pass/fail thresholds, worst-case stress scenario, risk/fallback plan |
-| Power-path schematic | Power path only, input connector through both regulated rails |
+| Power-path schematic | Power path only, input connector through both regulated rails (not included in this document package) |
